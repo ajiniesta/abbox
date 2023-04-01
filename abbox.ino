@@ -1,17 +1,123 @@
+#include <Keypad.h>
 #include <Joystick.h>
 
-// Create the Joystick
-Joystick_ Joystick;
+#define ENABLE_PULLUPS
+#define NUM_ROTARIES 4
+#define NUM_BUTTONS 14
 
-// Constant that maps the physical pin to the joystick button.
-const int pinToButtonMap = 2;
+#define NUM_ROWS 4
+#define NUM_COLS 4
+
+byte buttons[NUM_ROWS][NUM_COLS] = {
+  {0,1,2,3},
+  {4,5,6,7},
+  {8,9,10,11},
+  {12,13},
+};
+
+/**
+Matrix pins...
+   15 14 16 10
+A3  
+A2
+A1
+A0
+*/
+
+struct rotary {
+  byte pin1;
+  byte pin2;
+  int ccw;
+  int cw;
+  volatile unsigned char state;
+};
+
+rotary rotaries[NUM_ROTARIES]  {
+  {2,3,24,25,0},
+  {4,5,26,27,0},
+  {6,7,28,29,0},
+  {8,9,30,31,0},
+};
+
+#define DIR_CCW 0x10
+#define DIR_CW 0x20
+#define R_START 0x0
+
+//insert ttable
+#ifdef HALF_STEP
+#define R_CCW_BEGIN 0x1
+#define R_CW_BEGIN 0x2
+#define R_START_M 0x3
+#define R_CW_BEGIN_M 0x4
+#define R_CCW_BEGIN_M 0x5
+const unsigned char ttable[6][4] = {
+  // R_START (00)
+  {R_START_M,            R_CW_BEGIN,     R_CCW_BEGIN,  R_START},
+  // R_CCW_BEGIN
+  {R_START_M | DIR_CCW, R_START,        R_CCW_BEGIN,  R_START},
+  // R_CW_BEGIN
+  {R_START_M | DIR_CW,  R_CW_BEGIN,     R_START,      R_START},
+  // R_START_M (11)
+  {R_START_M,            R_CCW_BEGIN_M,  R_CW_BEGIN_M, R_START},
+  // R_CW_BEGIN_M
+  {R_START_M,            R_START_M,      R_CW_BEGIN_M, R_START | DIR_CW},
+  // R_CCW_BEGIN_M
+  {R_START_M,            R_CCW_BEGIN_M,  R_START_M,    R_START | DIR_CCW},
+};
+#else
+#define R_CW_FINAL 0x1
+#define R_CW_BEGIN 0x2
+#define R_CW_NEXT 0x3
+#define R_CCW_BEGIN 0x4
+#define R_CCW_FINAL 0x5
+#define R_CCW_NEXT 0x6
+const unsigned char ttable[7][4] = {
+  // R_START
+  {R_START,    R_CW_BEGIN,  R_CCW_BEGIN, R_START},
+  // R_CW_FINAL
+  {R_CW_NEXT,  R_START,     R_CW_FINAL,  R_START | DIR_CW},
+  // R_CW_BEGIN
+  {R_CW_NEXT,  R_CW_BEGIN,  R_START,     R_START},
+  // R_CW_NEXT
+  {R_CW_NEXT,  R_CW_BEGIN,  R_CW_FINAL,  R_START},
+  // R_CCW_BEGIN
+  {R_CCW_NEXT, R_START,     R_CCW_BEGIN, R_START},
+  // R_CCW_FINAL
+  {R_CCW_NEXT, R_CCW_FINAL, R_START,     R_START | DIR_CCW},
+  // R_CCW_NEXT
+  {R_CCW_NEXT, R_CCW_FINAL, R_CCW_BEGIN, R_START},
+};
+#endif
+
+byte rowPins[NUM_ROWS] = {21,20,19,18};
+byte colPins[NUM_COLS] = {15,14,16,10};
+
+//Create the Keypad
+Keypad buttonBox = Keypad(makeKeymap(buttons), rowPins, colPins, NUM_ROWS, NUM_COLS);
+
+// Create the Joystick
+Joystick_ Joystick(JOYSTICK_DEFAULT_REPORT_ID, JOYSTICK_TYPE_GAMEPAD,
+16, 0,
+false, false, false,
+false, false, false,
+false, false,
+false, false, false);
+
+void rotary_init() {
+  for (int i=0;i<NUM_ROTARIES;i++) {
+    pinMode(rotaries[i].pin1, INPUT);
+    pinMode(rotaries[i].pin2, INPUT);
+    #ifdef ENABLE_PULLUPS
+      digitalWrite(rotaries[i].pin1, HIGH);
+      digitalWrite(rotaries[i].pin2, HIGH);
+    #endif
+  }
+}
 
 void setup() {
-	// Initialize Button Pins
-	pinMode(pinToButtonMap, INPUT_PULLUP);
-
 	// Initialize Joystick Library
 	Joystick.begin();
+  rotary_init();
 }
 
 // Last state of the button
@@ -19,13 +125,45 @@ int lastButtonState = 0;
 
 void loop() {
 
-	// Read pin values
-	int currentButtonState = !digitalRead(pinToButtonMap);
-	if (currentButtonState != lastButtonState)
-	{
-	Joystick.setButton(0, currentButtonState);
-	lastButtonState = currentButtonState;
-	}
+  checkAllEncoders();
 
-	delay(50);
+  checkAllButtons();
+
+}
+
+void checkAllButtons(void) {
+  if (buttonBox.getKeys()){
+    for (int i=0; i<LIST_MAX; i++){
+      if ( buttonBox.key[i].stateChanged ){
+        switch (buttonBox.key[i].kstate) {                      
+          case PRESSED:
+          case HOLD:
+            Joystick.setButton(buttonBox.key[i].kchar, 1);
+            break;
+          case RELEASED:
+          case IDLE:
+            Joystick.setButton(buttonBox.key[i].kchar, 0);
+            break;
+        }
+     }   
+    }
+  }
+}
+
+unsigned char rotary_process(int _i) {
+   unsigned char pinstate = (digitalRead(rotaries[_i].pin2) << 1) | digitalRead(rotaries[_i].pin1);
+  rotaries[_i].state = ttable[rotaries[_i].state & 0xf][pinstate];
+  return (rotaries[_i].state & 0x30);
+}
+
+void checkAllEncoders(void) {
+  for (int i=0;i<NUM_ROTARIES;i++) {
+    unsigned char result = rotary_process(i);
+    if (result == DIR_CCW) {
+      Joystick.setButton(rotaries[i].ccw, 1); delay(50); Joystick.setButton(rotaries[i].ccw, 0);
+    };
+    if (result == DIR_CW) {
+      Joystick.setButton(rotaries[i].cw, 1); delay(50); Joystick.setButton(rotaries[i].cw, 0);
+    };
+  }
 }

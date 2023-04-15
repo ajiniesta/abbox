@@ -33,10 +33,10 @@ struct rotary {
 };
 
 rotary rotaries[NUM_ROTARIES]  {
-  {2,3,24,25,0},
-  {4,5,26,27,0},
-  {6,7,28,29,0},
-  {8,9,30,31,0},
+  {2,3,14,15,0},
+  {4,5,16,17,0},
+  {6,7,18,19,0},
+  {8,9,20,21,0},
 };
 
 #define DIR_CCW 0x10
@@ -97,7 +97,7 @@ Keypad buttonBox = Keypad(makeKeymap(buttons), rowPins, colPins, NUM_ROWS, NUM_C
 
 // Create the Joystick
 Joystick_ Joystick(JOYSTICK_DEFAULT_REPORT_ID, JOYSTICK_TYPE_GAMEPAD,
-16, 0,
+22, 0,
 false, false, false,
 false, false, false,
 false, false,
